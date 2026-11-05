@@ -345,15 +345,19 @@ func (m Model) rebuild() Model {
 			return formatNumber(value, v)
 		}),
 	)
-	// Keep the axes on the window and the bounds; the chart would otherwise widen them to fit each pushed point.
+	// Keep the axes on the grid and the bounds; the chart would otherwise widen them to fit each pushed point.
 	chart.AutoMinX, chart.AutoMaxX, chart.AutoMinY, chart.AutoMaxY = false, false, false, false
-	chart.SetTimeRange(from, to)
-	chart.SetViewTimeRange(from, to)
+	// The Y labels take columns from the plot, so the plot width (one bucket per braille dot) is known only now.
 	chart.SetYRange(lo, hi)
 	chart.SetViewYRange(lo, hi)
 
 	buckets := chart.GraphWidth() * brailleDotsPerCell
-	gap := maxGap(m.points, m.window/time.Duration(max(buckets, 1)))
+	gridFrom, gridTo, bucket := gridRange(to, m.window, buckets)
+
+	chart.SetTimeRange(gridFrom, gridTo)
+	chart.SetViewTimeRange(gridFrom, gridTo)
+
+	gap := maxGap(m.points, bucket)
 
 	// Each run is its own data set, so the chart leaves a gap between runs instead of joining them.
 	var names []string
@@ -364,7 +368,7 @@ func (m Model) rebuild() Model {
 
 		chart.SetDataSetStyle(name, lipgloss.NewStyle().Foreground(lipgloss.Cyan))
 
-		for _, p := range downsample(run, from, to, buckets) {
+		for _, p := range downsample(run, gridFrom, gridTo, buckets) {
 			chart.PushDataSet(name, timeserieslinechart.TimePoint{Time: p.t, Value: p.v})
 		}
 	}

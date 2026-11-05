@@ -1,11 +1,11 @@
 ---
 id: TASK-1.6
 title: Add interactive controls to the TUI graph
-status: Done
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-05T04:02:00Z'
-updated_date: '2026-11-05T05:07:00Z'
+updated_date: '2026-11-05T05:10:00Z'
 labels:
   - tui
 dependencies:
@@ -50,6 +50,7 @@ With a working graph, the next friction is restarting the command to look at ano
 - [x] #4 A help footer lists the available keys
 - [x] #5 The daemon collects and stores a cpu metric (used_pct, user_pct, system_pct) alongside memory
 - [x] #6 A key switches the graph between the cpu and memory kinds without restarting
+- [ ] #7 Downsampling buckets sit on a fixed time grid, so the averages of past buckets stay the same between refreshes
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -109,6 +110,13 @@ With a working graph, the next friction is restarting the command to look at ano
 Commits: (1) CPU collector + monitor loop with tests, (2) TUI runtime state + gen + fetch range, (3) keys + footer with tests. Groma: record modified files per the backlog guide; update the collector description (memory and CPU) at the end if it says memory only.
 
 Out of scope: per-core CPU, load average, multiple series on one chart, configurable presets, reverse-cycle keys.
+
+8. Stable buckets (added after review)
+   - The bucket edges start at now - window, which moves by refresh + request time on every poll, so samples change buckets and the whole line wobbles.
+   - New pure helper gridRange(to, window, buckets) -> (from, to, bucket): bucket = window / buckets, end = to.Truncate(bucket) + bucket (end of the bucket holding now), start = end - bucket x buckets. Truncate is relative to absolute time, so a sample always falls into the same bucket while the width and window stay the same.
+   - rebuild: compute buckets from GraphWidth after setting the Y range, then use the grid range for downsample, maxGap and the chart X range. The status line keeps using the true window [now - window, now].
+   - A resize, a window change or a wider Y label changes the bucket width and moves the grid once; that is expected.
+   - Tests: gridRange alignment and span; downsample on the grid at two view times less than a bucket apart gives identical points for every complete bucket.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes

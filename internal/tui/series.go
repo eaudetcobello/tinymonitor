@@ -131,6 +131,20 @@ func maxGap(points []point, bucket time.Duration) time.Duration {
 	return max(floor, gapSpacings*spacings[len(spacings)/2])
 }
 
+// gridRange returns the range [from, to] to downsample a window ending at end into buckets slices, and the slice
+// width. Slice edges are multiples of the width in absolute time, so a sample stays in the same slice as end moves;
+// to is the end of the slice holding end. buckets <= 0 returns the plain window with a zero width.
+func gridRange(end time.Time, window time.Duration, buckets int) (time.Time, time.Time, time.Duration) {
+	bucket := window / time.Duration(max(buckets, 1))
+	if buckets <= 0 || bucket <= 0 {
+		return end.Add(-window), end, 0
+	}
+
+	to := end.Truncate(bucket).Add(bucket)
+
+	return to.Add(-bucket * time.Duration(buckets)), to, bucket
+}
+
 // downsample splits [from, to] into buckets equal time slices and returns one point per non-empty slice:
 // the mean time and mean value of its samples. Points outside [from, to] are dropped.
 func downsample(points []point, from, to time.Time, buckets int) []point {
