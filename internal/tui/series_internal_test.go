@@ -44,7 +44,7 @@ func pts(pairs ...float64) []point {
 func TestMerge(t *testing.T) {
 	t.Parallel()
 
-	v := map[string]float64{"used_pct": 1}
+	v := map[string]float64{usedPct: 1}
 
 	tests := []struct {
 		name       string
@@ -95,9 +95,10 @@ func TestSelectValue(t *testing.T) {
 		wantValue string
 	}{
 		{"explicit value wins", "c", model.KindMemory, data, "c"},
-		{"kind default", "", model.KindMemory, data, "used_pct"},
-		{"first name without a default", "", model.KindCPU, data, "a"},
-		{"nothing to pick", "", model.KindCPU, nil, ""},
+		{"memory default", "", model.KindMemory, data, usedPct},
+		{"cpu default", "", model.KindCPU, data, usedPct},
+		{"first name without a default", "", model.Kind("other"), data, "a"},
+		{"nothing to pick", "", model.Kind("other"), nil, ""},
 	}
 
 	for _, tt := range tests {
@@ -259,5 +260,72 @@ func TestBounds(t *testing.T) {
 				t.Errorf("bounds = (%v, %v, %v), want (%v, %v, %v)", lo, hi, ok, tt.wantLo, tt.wantHi, tt.wantOK)
 			}
 		})
+	}
+}
+
+func TestGridRange(t *testing.T) {
+	t.Parallel()
+
+	end := base().Add(1234 * time.Millisecond)
+	from, to, bucket := gridRange(end, 5*time.Minute, 200)
+
+	if bucket != 1500*time.Millisecond {
+		t.Errorf("bucket = %s, want 1.5s", bucket)
+	}
+
+	if !to.After(end) || to.Sub(end) > bucket {
+		t.Errorf("to = %s, want the end of the bucket holding %s", to, end)
+	}
+
+	if to.UnixNano()%int64(bucket) != 0 || from.UnixNano()%int64(bucket) != 0 {
+		t.Errorf("range [%s, %s] is not on multiples of %s", from, to, bucket)
+	}
+
+	if got := to.Sub(from); got != 200*bucket {
+		t.Errorf("span = %s, want 200 buckets", got)
+	}
+
+	from, to, bucket = gridRange(end, time.Minute, 0)
+	if bucket != 0 || !to.Equal(end) || !from.Equal(end.Add(-time.Minute)) {
+		t.Errorf("no buckets: got [%s, %s] width %s, want the plain window", from, to, bucket)
+	}
+}
+
+func TestGridKeepsPastBucketsStableAsTimeMoves(t *testing.T) {
+	t.Parallel()
+
+	const window, buckets = 5 * time.Minute, 200
+
+	// Two samples per second with varying values, like the collector.
+	points := make([]point, 0, 1000)
+	for i := range 1000 {
+		points = append(points, point{t: base().Add(time.Duration(i) * 500 * time.Millisecond), v: float64(i % 7)})
+	}
+
+	end := points[len(points)-1].t
+	from1, to1, bucket := gridRange(end, window, buckets)
+	from2, to2, _ := gridRange(end.Add(700*time.Millisecond), window, buckets)
+
+	first := downsample(points, from1, to1, buckets)
+	second := downsample(points, from2, to2, buckets)
+
+	// Every bucket inside both views, except the oldest and the newest, holds the same point. The second view is
+	// later, so it starts and ends no earlier than the first.
+	lo, hi := from2.Add(bucket), to1.Add(-bucket)
+	inRange := func(ps []point) map[time.Time]float64 {
+		out := map[time.Time]float64{}
+
+		for _, p := range ps {
+			if !p.t.Before(lo) && p.t.Before(hi) {
+				out[p.t] = p.v
+			}
+		}
+
+		return out
+	}
+
+	a, b := inRange(first), inRange(second)
+	if len(a) == 0 || !reflect.DeepEqual(a, b) {
+		t.Errorf("past buckets changed when the view moved by 700ms:\nbefore %v\nafter  %v", a, b)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -13,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/eaudetcobello/tinymonitor/internal/collector"
+	"github.com/eaudetcobello/tinymonitor/internal/model"
 	"github.com/eaudetcobello/tinymonitor/internal/server"
 	"github.com/eaudetcobello/tinymonitor/internal/service"
 )
@@ -29,9 +31,10 @@ func main() {
 
 	go server.Start(ctx, metricsService)
 
-	monitor(ctx, collector.Gopsutil{}, metricsService)
+	monitor(ctx, &collector.Gopsutil{}, metricsService)
 }
 
+// monitor collects and stores a memory and a CPU sample every tick until ctx ends.
 func monitor(ctx context.Context, c collector.Collector, metricsService *service.Metrics) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -43,22 +46,32 @@ func monitor(ctx context.Context, c collector.Collector, metricsService *service
 
 			return
 		case <-ticker.C:
-			metric, err := c.Memory()
-			if err != nil {
-				log.Printf("collect memory: %v", err)
-
-				continue
-			}
-
-			if err := metricsService.Put(ctx, metric); err != nil {
-				log.Printf("store metric: %v", err)
-
-				continue
-			}
-
-			log.Printf("put metric")
+			collect(ctx, "memory", c.Memory, metricsService)
+			collect(ctx, "cpu", c.CPU, metricsService)
 		}
 	}
+}
+
+// collect stores one sample from read. A failure is logged, except the CPU collector's first baseline reading.
+func collect(ctx context.Context, name string, read func() (model.Metric, error), metricsService *service.Metrics) {
+	metric, err := read()
+	if errors.Is(err, collector.ErrNoBaseline) {
+		return
+	}
+
+	if err != nil {
+		log.Printf("collect %s: %v", name, err)
+
+		return
+	}
+
+	if err := metricsService.Put(ctx, metric); err != nil {
+		log.Printf("store %s metric: %v", name, err)
+
+		return
+	}
+
+	log.Printf("put %s metric", name)
 }
 
 func createDynamoClient(ctx context.Context) *dynamodb.Client {

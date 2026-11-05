@@ -60,7 +60,7 @@ func TestParseConfigOverrides(t *testing.T) {
 		flagKind, "cpu",
 		flagWindow, "1h",
 		flagRefresh, "5s",
-		flagValue, " avail_gib ",
+		flagValue, " "+availGiB+" ",
 	), io.Discard)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -72,7 +72,7 @@ func TestParseConfigOverrides(t *testing.T) {
 		Kind:      model.KindCPU,
 		Window:    time.Hour,
 		Refresh:   5 * time.Second,
-		Value:     "avail_gib",
+		Value:     availGiB,
 	}
 	if got != want {
 		t.Errorf("got %+v, want %+v", got, want)

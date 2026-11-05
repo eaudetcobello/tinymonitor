@@ -9,16 +9,17 @@ import (
 	"github.com/eaudetcobello/tinymonitor/internal/model"
 )
 
+// usedPct is the default series of the memory and CPU kinds.
+const usedPct = "used_pct"
+
 // gapSpacings is how many typical sample spacings two samples may be apart before the line breaks.
 const gapSpacings = 4
 
 // defaultValue names the series graphed for kind when -value is empty, or "" when the kind has none.
 func defaultValue(kind model.Kind) string {
 	switch kind {
-	case model.KindMemory:
-		return "used_pct"
-	case model.KindCPU:
-		return ""
+	case model.KindMemory, model.KindCPU:
+		return usedPct
 	}
 
 	return ""
@@ -128,6 +129,20 @@ func maxGap(points []point, bucket time.Duration) time.Duration {
 	slices.Sort(spacings)
 
 	return max(floor, gapSpacings*spacings[len(spacings)/2])
+}
+
+// gridRange returns the range [from, to] to downsample a window ending at end into buckets slices, and the slice
+// width. Slice edges are multiples of the width in absolute time, so a sample stays in the same slice as end moves;
+// to is the end of the slice holding end. buckets <= 0 returns the plain window with a zero width.
+func gridRange(end time.Time, window time.Duration, buckets int) (time.Time, time.Time, time.Duration) {
+	bucket := window / time.Duration(max(buckets, 1))
+	if buckets <= 0 || bucket <= 0 {
+		return end.Add(-window), end, 0
+	}
+
+	to := end.Truncate(bucket).Add(bucket)
+
+	return to.Add(-bucket * time.Duration(buckets)), to, bucket
 }
 
 // downsample splits [from, to] into buckets equal time slices and returns one point per non-empty slice:
