@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-05T04:02:00Z'
-updated_date: '2026-11-05T04:59:00Z'
+updated_date: '2026-11-05T05:02:00Z'
 labels:
   - tui
 dependencies:
@@ -25,6 +25,10 @@ modified_files:
   - internal/tui/series.go
   - internal/tui/series_internal_test.go
   - internal/tui/config.go
+  - internal/tui/controls.go
+  - internal/tui/model.go
+  - internal/tui/controls_internal_test.go
+  - internal/tui/model_test.go
 parent_task_id: TASK-1
 priority: low
 type: enhancement

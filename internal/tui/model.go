@@ -47,24 +47,39 @@ func WithClock(now func() time.Time) Option {
 	return func(m *Model) { m.now = now }
 }
 
-// pollMsg asks the Model to start the next fetch.
-type pollMsg struct{}
+// pollMsg asks the Model to start the next fetch. gen is the Model's gen when the poll was scheduled.
+type pollMsg struct{ gen int }
 
-// fetchedMsg carries the result of one fetch that ended its range at to.
+// fetchedMsg carries the result of one fetch that ended its range at to. gen is the Model's gen when the fetch
+// started; replace means the result holds the whole window and replaces the buffer.
 type fetchedMsg struct {
 	metrics []model.Metric
 	err     error
 	to      time.Time
+	gen     int
+	replace bool
 }
 
 // Model is the Bubble Tea model of tinymonitor-tui. It polls src every cfg.Refresh and draws the selected value
-// over the rolling cfg.Window, under a header with the settings and above a footer with the keys.
+// over the rolling window, under a header with the settings and above a footer with the keys.
+// Keys switch the kind, value and window and pause polling; cfg only sets where the view starts.
 type Model struct {
 	cfg Config
 	src MetricsSource
 	now func() time.Time
 
 	width, height int
+
+	// kind, window and want are the current view. want is the requested value, "" for the kind's default.
+	kind   model.Kind
+	window time.Duration
+	want   string
+	// paused freezes the view at pausedAt and stops polling.
+	paused   bool
+	pausedAt time.Time
+	// gen is bumped by every key that starts its own fetch. Poll and fetch messages of an older gen are dropped,
+	// so a single poll chain runs and a late answer for a previous kind or window never reaches the buffer.
+	gen int
 
 	// metrics holds the samples of the window, ordered by time.
 	metrics []model.Metric
@@ -82,7 +97,7 @@ type Model struct {
 
 // New returns a Model that graphs the metrics src returns for cfg.
 func New(cfg Config, src MetricsSource, opts ...Option) Model {
-	m := Model{cfg: cfg, src: src, now: time.Now}
+	m := Model{cfg: cfg, src: src, now: time.Now, kind: cfg.Kind, window: cfg.Window, want: cfg.Value}
 	for _, opt := range opts {
 		opt(&m)
 	}
@@ -92,11 +107,11 @@ func New(cfg Config, src MetricsSource, opts ...Option) Model {
 
 // Init implements tea.Model: it starts the first fetch.
 func (m Model) Init() tea.Cmd {
-	return m.fetch()
+	return m.fetch(false)
 }
 
 // Update implements tea.Model. Fetches run as commands, outside the UI loop; each result schedules the next poll
-// one refresh later, so requests never overlap.
+// one refresh later, so requests never overlap. While paused, results still land but schedule no poll.
 //
 //nolint:ireturn // tea.Model requires returning the interface.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -105,22 +120,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m = m.rebuild()
 	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		}
+		return m.handleKey(msg)
 	case pollMsg:
-		return m, m.fetch()
-	case fetchedMsg:
-		m.err = msg.err
-		if msg.err == nil {
-			m.metrics = merge(m.metrics, msg.metrics, msg.to.Add(-m.cfg.Window))
-			m.loaded = true
+		if msg.gen != m.gen || m.paused {
+			return m, nil
 		}
 
-		m = m.rebuild()
-
-		return m, tea.Tick(m.cfg.Refresh, func(time.Time) tea.Msg { return pollMsg{} })
+		return m, m.fetch(false)
+	case fetchedMsg:
+		return m.handleFetched(msg)
 	}
 
 	return m, nil
@@ -138,13 +146,18 @@ func (m Model) View() tea.View {
 	line := lipgloss.NewStyle().Inline(true).MaxWidth(m.width)
 	header := line.Render(lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf(
 		"tinymonitor  %s  agent %d  %s  window %s  refresh %s",
-		m.cfg.ServerURL, m.cfg.AgentID, m.cfg.Kind, m.cfg.Window, m.cfg.Refresh,
+		m.cfg.ServerURL, m.cfg.AgentID, m.kind, m.window, m.cfg.Refresh,
 	)))
 	rows := []string{header, line.Render(m.status())}
 
 	if m.err != nil {
+		retry := fmt.Sprintf("retrying every %s", m.cfg.Refresh)
+		if m.paused {
+			retry = "resume to retry"
+		}
+
 		rows = append(rows, line.Render(lipgloss.NewStyle().Foreground(lipgloss.Red).Render(fmt.Sprintf(
-			"error (retrying every %s): %s", m.cfg.Refresh, errorText(m.err)))))
+			"error (%s): %s", retry, errorText(m.err)))))
 	}
 
 	w, h := m.bodySize()
@@ -154,7 +167,7 @@ func (m Model) View() tea.View {
 		body = lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, line.Render(m.placeholder()))
 	}
 
-	rows = append(rows, body, line.Render(lipgloss.NewStyle().Faint(true).Render("q quit")))
+	rows = append(rows, body, line.Render(lipgloss.NewStyle().Faint(true).Render(m.footer())))
 
 	v.SetContent(lipgloss.NewStyle().
 		Width(m.width).MaxWidth(m.width).
@@ -164,26 +177,136 @@ func (m Model) View() tea.View {
 	return v
 }
 
-// fetch returns a command that reads the samples the buffer is missing: the whole window when it is empty,
-// otherwise everything from the newest buffered sample on.
-func (m Model) fetch() tea.Cmd {
-	to := m.now()
+// handleFetched stores the result of a fetch of the current gen and schedules the next poll unless paused.
+func (m Model) handleFetched(msg fetchedMsg) (Model, tea.Cmd) {
+	if msg.gen != m.gen {
+		return m, nil
+	}
 
-	from := to.Add(-m.cfg.Window)
-	if n := len(m.metrics); n > 0 {
+	m.err = msg.err
+	if msg.err == nil {
+		buf := m.metrics
+		if msg.replace {
+			buf = nil
+		}
+
+		m.metrics = merge(buf, msg.metrics, msg.to.Add(-m.window))
+		m.loaded = true
+	}
+
+	m = m.rebuild()
+
+	if m.paused {
+		return m, nil
+	}
+
+	gen := m.gen
+
+	return m, tea.Tick(m.cfg.Refresh, func(time.Time) tea.Msg { return pollMsg{gen: gen} })
+}
+
+// handleKey applies one key press: quit, switch kind or value, widen or narrow the window, pause or resume.
+func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "k":
+		// The buffer holds one kind, so start over with the new kind's default value.
+		m.kind, m.want = nextKind(m.kind), ""
+		m.metrics, m.loaded, m.err = nil, false, nil
+
+		return m.restart(true)
+	case "v":
+		if len(m.available) > 0 {
+			m.want = nextValue(m.value, m.available)
+		}
+	case "+", "=":
+		return m.setWindow(widerWindow(m.window))
+	case "-":
+		return m.setWindow(narrowerWindow(m.window, m.cfg.Refresh))
+	case "space", "p":
+		return m.togglePause()
+	default:
+		return m, nil
+	}
+
+	return m.rebuild(), nil
+}
+
+// setWindow switches to window w. A wider window reloads the whole window, keeping the graph until it lands;
+// the buffer already covers a narrower one.
+func (m Model) setWindow(w time.Duration) (Model, tea.Cmd) {
+	wider := w > m.window
+	m.window = w
+
+	if wider {
+		return m.restart(true)
+	}
+
+	return m.rebuild(), nil
+}
+
+// togglePause freezes the view at the current time, or resumes polling from the newest buffered sample.
+func (m Model) togglePause() (Model, tea.Cmd) {
+	if m.paused {
+		m.paused = false
+
+		return m.restart(false)
+	}
+
+	m.paused, m.pausedAt = true, m.now()
+
+	return m.rebuild(), nil
+}
+
+// restart drops pending polls and fetches and starts a new fetch, which replaces the buffer when replace is set.
+// When live, its result starts the new poll chain.
+func (m Model) restart(replace bool) (Model, tea.Cmd) {
+	m.gen++
+	m = m.rebuild()
+
+	return m, m.fetch(replace)
+}
+
+// viewTime returns the end of the window shown: the pause time while paused, otherwise now.
+func (m Model) viewTime() time.Time {
+	if m.paused {
+		return m.pausedAt
+	}
+
+	return m.now()
+}
+
+// footer returns the key help shown on the last line.
+func (m Model) footer() string {
+	pause := "pause"
+	if m.paused {
+		pause = "resume"
+	}
+
+	return "k kind  v value  +/- window  space " + pause + "  q quit"
+}
+
+// fetch returns a command that reads the samples the buffer is missing, up to the view time: the whole window when
+// replace is set or the buffer is empty, otherwise everything from the newest buffered sample on, at most a window.
+func (m Model) fetch(replace bool) tea.Cmd {
+	to := m.viewTime()
+
+	from := to.Add(-m.window)
+	if n := len(m.metrics); !replace && n > 0 && m.metrics[n-1].Time.After(from) {
 		from = m.metrics[n-1].Time
 	}
 
-	src, cfg := m.src, m.cfg
-	timeout := min(max(2*cfg.Refresh, minRequestTimeout), client.DefaultTimeout)
+	src, agentID, kind, gen := m.src, m.cfg.AgentID, m.kind, m.gen
+	timeout := min(max(2*m.cfg.Refresh, minRequestTimeout), client.DefaultTimeout)
 
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		metrics, err := src.Get(ctx, cfg.AgentID, cfg.Kind, from, to)
+		metrics, err := src.Get(ctx, agentID, kind, from, to)
 
-		return fetchedMsg{metrics: metrics, err: err, to: to}
+		return fetchedMsg{metrics: metrics, err: err, to: to, gen: gen, replace: replace}
 	}
 }
 
@@ -199,10 +322,10 @@ func (m Model) bodySize() (int, int) {
 
 // rebuild returns m with the series and the chart recomputed from the buffered metrics and the terminal size.
 func (m Model) rebuild() Model {
-	to := m.now()
-	from := to.Add(-m.cfg.Window)
+	to := m.viewTime()
+	from := to.Add(-m.window)
 
-	m.value, m.available = selectValue(m.cfg.Value, m.cfg.Kind, m.metrics)
+	m.value, m.available = selectValue(m.want, m.kind, m.metrics)
 	m.points = seriesFor(m.metrics, m.value, from, to)
 	m.chart = ""
 
@@ -230,7 +353,7 @@ func (m Model) rebuild() Model {
 	chart.SetViewYRange(lo, hi)
 
 	buckets := chart.GraphWidth() * brailleDotsPerCell
-	gap := maxGap(m.points, m.cfg.Window/time.Duration(max(buckets, 1)))
+	gap := maxGap(m.points, m.window/time.Duration(max(buckets, 1)))
 
 	// Each run is its own data set, so the chart leaves a gap between runs instead of joining them.
 	var names []string
@@ -254,8 +377,13 @@ func (m Model) rebuild() Model {
 
 // status returns the line above the chart: the series, its latest value and its range over the window.
 func (m Model) status() string {
+	var paused string
+	if m.paused {
+		paused = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Yellow).Render("PAUSED") + "  "
+	}
+
 	if len(m.points) == 0 {
-		return m.value
+		return paused + m.value
 	}
 
 	latest := m.points[len(m.points)-1]
@@ -265,11 +393,12 @@ func (m Model) status() string {
 		lo, hi = min(lo, p.v), max(hi, p.v)
 	}
 
-	return fmt.Sprintf("%s  latest %s (%s ago)  min %s  max %s  over %s",
+	return fmt.Sprintf("%s%s  latest %s (%s ago)  min %s  max %s  over %s",
+		paused,
 		lipgloss.NewStyle().Bold(true).Render(m.value),
 		lipgloss.NewStyle().Bold(true).Render(formatValue(m.value, latest.v)),
-		m.now().Sub(latest.t).Truncate(time.Second),
-		formatValue(m.value, lo), formatValue(m.value, hi), m.cfg.Window)
+		m.viewTime().Sub(latest.t).Truncate(time.Second),
+		formatValue(m.value, lo), formatValue(m.value, hi), m.window)
 }
 
 // placeholder returns the text shown in place of the chart.
@@ -282,10 +411,10 @@ func (m Model) placeholder() string {
 	case !m.loaded:
 		return "loading…"
 	case len(m.metrics) == 0:
-		return fmt.Sprintf("no data in the last %s for agent %d (%s)", m.cfg.Window, m.cfg.AgentID, m.cfg.Kind)
+		return fmt.Sprintf("no data in the last %s for agent %d (%s)", m.window, m.cfg.AgentID, m.kind)
 	case len(m.points) == 0:
 		return fmt.Sprintf("no %q in the last %s (available: %s)",
-			m.value, m.cfg.Window, strings.Join(m.available, ", "))
+			m.value, m.window, strings.Join(m.available, ", "))
 	case w < minChartWidth || h < minChartHeight:
 		return "terminal too small for the graph"
 	default:
