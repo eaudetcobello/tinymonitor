@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -15,10 +16,30 @@ import (
 	"github.com/eaudetcobello/tinymonitor/internal/model"
 )
 
-const timestampFormat = "2006-01-02T15:04:05.000000000Z"
+const (
+	tableName = "metrics"
+	// timestampFormat has a fixed width, so sort keys order lexically by time.
+	timestampFormat = "2006-01-02T15:04:05.000000000Z"
+)
+
+// DynamoDB is the subset of the DynamoDB API used by Metrics. *dynamodb.Client implements it.
+type DynamoDB interface {
+	CreateTable(
+		ctx context.Context, params *dynamodb.CreateTableInput, optFns ...func(*dynamodb.Options),
+	) (*dynamodb.CreateTableOutput, error)
+	DescribeTable(
+		ctx context.Context, params *dynamodb.DescribeTableInput, optFns ...func(*dynamodb.Options),
+	) (*dynamodb.DescribeTableOutput, error)
+	PutItem(
+		ctx context.Context, params *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options),
+	) (*dynamodb.PutItemOutput, error)
+	Query(
+		ctx context.Context, params *dynamodb.QueryInput, optFns ...func(*dynamodb.Options),
+	) (*dynamodb.QueryOutput, error)
+}
 
 type Metrics struct {
-	DBClient *dynamodb.Client
+	DBClient DynamoDB
 }
 
 type metricItem struct {
@@ -31,21 +52,37 @@ type metricItem struct {
 }
 
 func toItem(m model.Metric, retention time.Duration) metricItem {
-	ts := m.Time.UTC().Format(timestampFormat)
-
 	return metricItem{
 		AgentID: m.AgentID,
-		SK:      string(m.Kind) + "#" + ts,
+		SK:      sortKey(m.Kind, m.Time),
 		Kind:    string(m.Kind),
-		Time:    ts,
+		Time:    m.Time.UTC().Format(timestampFormat),
 		Values:  m.Values,
 		TTL:     m.Time.Add(retention).Unix(),
 	}
 }
 
+func sortKey(kind model.Kind, t time.Time) string {
+	return string(kind) + "#" + t.UTC().Format(timestampFormat)
+}
+
+func (i metricItem) toMetric() (model.Metric, error) {
+	t, err := time.Parse(timestampFormat, i.Time)
+	if err != nil {
+		return model.Metric{}, fmt.Errorf("parse time %q: %w", i.Time, err)
+	}
+
+	return model.Metric{
+		AgentID: i.AgentID,
+		Kind:    model.Kind(i.Kind),
+		Time:    t,
+		Values:  i.Values,
+	}, nil
+}
+
 func (s *Metrics) CreateTable(ctx context.Context) {
 	_, err := s.DBClient.CreateTable(ctx, &dynamodb.CreateTableInput{
-		TableName:   aws.String("metrics"),
+		TableName:   aws.String(tableName),
 		BillingMode: types.BillingModePayPerRequest,
 		AttributeDefinitions: []types.AttributeDefinition{
 			{AttributeName: aws.String("agent_id"), AttributeType: types.ScalarAttributeTypeN},
@@ -64,7 +101,7 @@ func (s *Metrics) CreateTable(ctx context.Context) {
 
 	err = dynamodb.NewTableExistsWaiter(s.DBClient).Wait(
 		ctx,
-		&dynamodb.DescribeTableInput{TableName: aws.String("metrics")},
+		&dynamodb.DescribeTableInput{TableName: aws.String(tableName)},
 		30*time.Second,
 	)
 	if err != nil {
@@ -72,8 +109,45 @@ func (s *Metrics) CreateTable(ctx context.Context) {
 	}
 }
 
-func (s *Metrics) Get(ctx context.Context, agentID uint32, from time.Time, to time.Time) ([]model.Metric, error) {
-	return nil, nil
+// Get returns the metrics of one kind for an agent with a time in [from, to], ordered by time ascending.
+func (s *Metrics) Get(
+	ctx context.Context, agentID uint32, kind model.Kind, from, to time.Time,
+) ([]model.Metric, error) {
+	paginator := dynamodb.NewQueryPaginator(s.DBClient, &dynamodb.QueryInput{
+		TableName:              aws.String(tableName),
+		KeyConditionExpression: aws.String("agent_id = :agent_id AND sk BETWEEN :from AND :to"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":agent_id": &types.AttributeValueMemberN{Value: strconv.FormatUint(uint64(agentID), 10)},
+			":from":     &types.AttributeValueMemberS{Value: sortKey(kind, from)},
+			":to":       &types.AttributeValueMemberS{Value: sortKey(kind, to)},
+		},
+		ScanIndexForward: aws.Bool(true),
+	})
+
+	metrics := make([]model.Metric, 0)
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("query metrics: %w", err)
+		}
+
+		var items []metricItem
+		if err := attributevalue.UnmarshalListOfMaps(page.Items, &items); err != nil {
+			return nil, fmt.Errorf("unmarshal metrics: %w", err)
+		}
+
+		for _, item := range items {
+			m, err := item.toMetric()
+			if err != nil {
+				return nil, err
+			}
+
+			metrics = append(metrics, m)
+		}
+	}
+
+	return metrics, nil
 }
 
 func (s *Metrics) Put(ctx context.Context, metric model.Metric) error {
@@ -83,7 +157,7 @@ func (s *Metrics) Put(ctx context.Context, metric model.Metric) error {
 	}
 
 	_, err = s.DBClient.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String("metrics"),
+		TableName: aws.String(tableName),
 		Item:      metricItem,
 	})
 	if err != nil {

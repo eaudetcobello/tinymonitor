@@ -6,16 +6,22 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/eaudetcobello/tinymonitor/internal/service"
+	"github.com/eaudetcobello/tinymonitor/internal/model"
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/echo/v5/middleware"
 )
 
-type Server struct {
-	MetricsService *service.Metrics
+// MetricsReader reads stored metrics for one agent and kind within [from, to], ordered by time ascending.
+type MetricsReader interface {
+	Get(ctx context.Context, agentID uint32, kind model.Kind, from, to time.Time) ([]model.Metric, error)
 }
 
-func Start(ctx context.Context, metricsService *service.Metrics) *echo.Echo {
+type Server struct {
+	MetricsService MetricsReader
+}
+
+// New returns an Echo instance with the middleware and routes registered.
+func New(metricsService MetricsReader) *echo.Echo {
 	s := &Server{
 		MetricsService: metricsService,
 	}
@@ -25,6 +31,12 @@ func Start(ctx context.Context, metricsService *service.Metrics) *echo.Echo {
 	e.Use(middleware.Recover())
 
 	e.GET("/metrics", s.handleGetMetrics)
+
+	return e
+}
+
+func Start(ctx context.Context, metricsService MetricsReader) *echo.Echo {
+	e := New(metricsService)
 
 	config := echo.StartConfig{
 		Address:         ":1323",
@@ -42,6 +54,7 @@ func Start(ctx context.Context, metricsService *service.Metrics) *echo.Echo {
 
 type GetMetricsParams struct {
 	AgentID uint32 `query:"agent_id"`
+	Kind    string `query:"kind"`
 	From    string `query:"from"`
 	To      string `query:"to"`
 }
@@ -51,6 +64,11 @@ func (s *Server) handleGetMetrics(c *echo.Context) error {
 
 	if err := c.Bind(&params); err != nil {
 		return c.String(http.StatusBadRequest, "bad request")
+	}
+
+	kind, err := model.ParseKind(params.Kind)
+	if err != nil {
+		return c.String(http.StatusBadRequest, err.Error())
 	}
 
 	from, err := time.Parse(time.RFC3339Nano, params.From)
@@ -63,9 +81,14 @@ func (s *Server) handleGetMetrics(c *echo.Context) error {
 		return c.String(http.StatusBadRequest, "invalid to timestamp")
 	}
 
+	if from.After(to) {
+		return c.String(http.StatusBadRequest, "from must not be after to")
+	}
+
 	metrics, err := s.MetricsService.Get(
 		c.Request().Context(),
 		params.AgentID,
+		kind,
 		from,
 		to,
 	)
