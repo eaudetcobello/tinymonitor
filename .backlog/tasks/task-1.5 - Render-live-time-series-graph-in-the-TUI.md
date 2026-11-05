@@ -5,18 +5,18 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-05T04:02:00Z'
-updated_date: '2026-11-05T04:46:00Z'
+updated_date: '2026-11-05T04:50:00Z'
 labels:
   - tui
 dependencies:
   - TASK-1.3
   - TASK-1.4
 references:
-  - model
-  - client
   - internal/tui/model.go
   - internal/tui/config.go
   - cmd/tinymonitor-tui/main.go
+  - live-graph
+  - metrics-client
 modified_files:
   - internal/tui/series.go
   - internal/tui/series_internal_test.go
