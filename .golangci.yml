@@ -14,3 +14,8 @@ linters:
       # Echo response writers return the handler's final error, so wrapping them adds nothing.
       ignore-sig-regexps:
         - '\(\*github\.com/labstack/echo/v5\.Context\)\.(String|JSON|HTML|XML|Blob|Stream|File|NoContent|Redirect)\('
+    tagliatelle:
+      case:
+        rules:
+          # The HTTP API uses snake_case JSON, matching the DynamoDB attribute names.
+          json: snake
