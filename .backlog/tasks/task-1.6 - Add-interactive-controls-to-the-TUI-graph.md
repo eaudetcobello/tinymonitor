@@ -1,11 +1,11 @@
 ---
 id: TASK-1.6
 title: Add interactive controls to the TUI graph
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-05T04:02:00Z'
-updated_date: '2026-11-05T05:02:00Z'
+updated_date: '2026-11-05T05:07:00Z'
 labels:
   - tui
 dependencies:
@@ -29,6 +29,7 @@ modified_files:
   - internal/tui/model.go
   - internal/tui/controls_internal_test.go
   - internal/tui/model_test.go
+  - internal/tui/config_test.go
 parent_task_id: TASK-1
 priority: low
 type: enhancement
@@ -43,12 +44,12 @@ With a working graph, the next friction is restarting the command to look at ano
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A key cycles through the value series of the current kind (e.g. used_pct, avail_gib)
-- [ ] #2 Keys widen and narrow the time window between sensible presets (e.g. 1m, 5m, 15m, 1h)
-- [ ] #3 A key pauses and resumes live refresh
-- [ ] #4 A help footer lists the available keys
-- [ ] #5 The daemon collects and stores a cpu metric (used_pct, user_pct, system_pct) alongside memory
-- [ ] #6 A key switches the graph between the cpu and memory kinds without restarting
+- [x] #1 A key cycles through the value series of the current kind (e.g. used_pct, avail_gib)
+- [x] #2 Keys widen and narrow the time window between sensible presets (e.g. 1m, 5m, 15m, 1h)
+- [x] #3 A key pauses and resumes live refresh
+- [x] #4 A help footer lists the available keys
+- [x] #5 The daemon collects and stores a cpu metric (used_pct, user_pct, system_pct) alongside memory
+- [x] #6 A key switches the graph between the cpu and memory kinds without restarting
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -109,3 +110,30 @@ Commits: (1) CPU collector + monitor loop with tests, (2) TUI runtime state + ge
 
 Out of scope: per-core CPU, load average, multiple series on one chart, configurable presets, reverse-cycle keys.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Branch: task-1.6-tui-controls from master.
+
+Deviations from the plan:
+- Two commits instead of three: the runtime view state and the keys landed together, since the state only exists to serve the keys.
+- Key handling is split into handleKey, handleFetched, setWindow and togglePause to stay under the cyclomatic limit; window presets are a function (no globals).
+- While paused, the error line reads "error (resume to retry): ..." since no retry happens.
+- Groma: the architecture map lives on the groma-curation branch, not master, so the collector description (memory only) is not updated here.
+
+Verification: go vet, go test -race ./..., golangci-lint run ./... (0 issues). Live: GET /metrics?kind=cpu returns used_pct/user_pct/system_pct samples at 2/s from the daemon. TUI driven in a pty (pyte) against the running daemon: v cycles avail_gib -> total_gib, k switches memory -> cpu -> memory with the header updating, v on cpu shows user_pct, - goes to 1m, + to 5m then 15m, space shows PAUSED with the age frozen for 3s and the footer reading 'space resume', p resumes, q exits 0.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+The TUI graph is now explorable without restarting, and the daemon records CPU usage.
+
+- Daemon: collector.Gopsutil gains CPU(), computing used_pct, user_pct and system_pct from the change between two cpu.Times readings (first call primes the baseline). monitor() stores a memory and a CPU sample each tick; one failing does not skip the other.
+- TUI keys: k cycles cpu/memory (reloads the window, resets to the kind's default value), v cycles the value series (no request), +/- steps through 1m, 5m, 15m, 1h (widening reloads the whole window, narrowing only redraws), space/p pauses and resumes (pause freezes the axis and the age; keys still work on the frozen moment). The footer lists the keys and the status line shows PAUSED.
+- Keys that start a fetch bump a generation counter; late polls and results from an older generation are dropped, so one poll chain runs and an old kind's answer never lands in the new buffer. Polls ask for at most one window, so resuming after a long pause stays cheap.
+- Tests: CPU math and baseline, preset/value/kind stepping, and model tests for each key including stale results, replace on widen, and pause/resume chains.
+
+Follow-up: the Groma map on groma-curation still describes the collector as memory only.
+<!-- SECTION:FINAL_SUMMARY:END -->
