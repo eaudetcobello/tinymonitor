@@ -2,11 +2,11 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug main.go",
+            "name": "Debug tinymonitor",
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "program": "${workspaceFolder}",
+            "program": "${workspaceFolder}/cmd/tinymonitor",
             "args": [],
             "env": {}
         }
