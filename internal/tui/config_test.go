@@ -18,6 +18,7 @@ const (
 	flagKind    = "kind"
 	flagWindow  = "window"
 	flagRefresh = "refresh"
+	flagValue   = "value"
 )
 
 // flags turns name/value pairs into "--name value" arguments.
@@ -59,6 +60,7 @@ func TestParseConfigOverrides(t *testing.T) {
 		flagKind, "cpu",
 		flagWindow, "1h",
 		flagRefresh, "5s",
+		flagValue, " avail_gib ",
 	), io.Discard)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -70,6 +72,7 @@ func TestParseConfigOverrides(t *testing.T) {
 		Kind:      model.KindCPU,
 		Window:    time.Hour,
 		Refresh:   5 * time.Second,
+		Value:     "avail_gib",
 	}
 	if got != want {
 		t.Errorf("got %+v, want %+v", got, want)
@@ -131,7 +134,7 @@ func TestParseConfigHelpDocumentsEveryFlag(t *testing.T) {
 		t.Fatalf("got error %v, want flag.ErrHelp", err)
 	}
 
-	for _, name := range []string{flagServer, flagAgent, flagKind, flagWindow, flagRefresh} {
+	for _, name := range []string{flagServer, flagAgent, flagKind, flagWindow, flagRefresh, flagValue} {
 		if !strings.Contains(out.String(), "-"+name+" ") {
 			t.Errorf("usage does not document %s:\n%s", name, out.String())
 		}

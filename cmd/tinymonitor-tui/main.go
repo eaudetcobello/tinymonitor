@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/eaudetcobello/tinymonitor/internal/client"
 	"github.com/eaudetcobello/tinymonitor/internal/tui"
 )
 
@@ -29,9 +30,18 @@ func run() int {
 		return 2
 	}
 
+	// ParseConfig has already validated the URL, and a zero timeout keeps the client default; the model bounds
+	// each request more tightly.
+	src, err := client.New(cfg.ServerURL, 0)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "tinymonitor-tui: %v\n", err)
+
+		return 2
+	}
+
 	// Bubble Tea quits cleanly on SIGTERM and returns ErrInterrupted on a SIGINT that bypasses raw mode
 	// (input that is not a TTY). Both are a requested stop, not a failure.
-	_, err = tea.NewProgram(tui.New(cfg)).Run()
+	_, err = tea.NewProgram(tui.New(cfg, src)).Run()
 	if err != nil && !errors.Is(err, tea.ErrInterrupted) {
 		_, _ = fmt.Fprintf(os.Stderr, "tinymonitor-tui: %v\n", err)
 
