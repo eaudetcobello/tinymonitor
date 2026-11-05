@@ -1,0 +1,11 @@
+version: "2"
+linters:
+  default: all
+  disable:
+    - revive
+    - varnamelen
+    - depguard
+    - exhaustruct
+    - mnd
+    - noinlineerr
+    - exhaustruct_v5
