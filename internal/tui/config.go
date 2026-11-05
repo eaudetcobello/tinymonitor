@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/eaudetcobello/tinymonitor/internal/client"
@@ -35,6 +36,8 @@ type Config struct {
 	ServerURL string
 	AgentID   uint32
 	Kind      model.Kind
+	// Value is the series to graph, such as used_pct. Empty selects the kind's default series.
+	Value string
 	// Window is the rolling time span shown on the graph.
 	Window time.Duration
 	// Refresh is how often the API is polled.
@@ -65,6 +68,8 @@ func ParseConfig(args []string, output io.Writer) (Config, error) {
 		return nil
 	})
 	fs.StringVar(&kind, "kind", string(model.KindMemory), fmt.Sprintf("metric kind, one of %v", model.Kinds()))
+	fs.StringVar(&cfg.Value, "value", "",
+		"value series to graph, such as used_pct (default: used_pct for memory, else the first series in the data)")
 	fs.DurationVar(&cfg.Window, "window", DefaultWindow, "rolling time window shown on the graph")
 	fs.DurationVar(&cfg.Refresh, "refresh", DefaultRefresh, "how often to poll the API, at most -window")
 
@@ -109,6 +114,7 @@ func (c *Config) validate(kind string) error {
 	}
 
 	c.Kind = k
+	c.Value = strings.TrimSpace(c.Value)
 
 	if c.Window <= 0 {
 		return fmt.Errorf("%w -window %s: must be greater than 0", ErrInvalidFlag, c.Window)
