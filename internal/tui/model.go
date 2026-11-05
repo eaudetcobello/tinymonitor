@@ -2,7 +2,9 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -142,7 +144,7 @@ func (m Model) View() tea.View {
 
 	if m.err != nil {
 		rows = append(rows, line.Render(lipgloss.NewStyle().Foreground(lipgloss.Red).Render(fmt.Sprintf(
-			"error: %s · retrying every %s", oneLine(m.err.Error()), m.cfg.Refresh))))
+			"error (retrying every %s): %s", m.cfg.Refresh, errorText(m.err)))))
 	}
 
 	w, h := m.bodySize()
@@ -309,7 +311,11 @@ func formatValue(name string, v float64) string {
 	return formatNumber(name, v)
 }
 
-// oneLine joins the lines of s so an error message fits on one row.
-func oneLine(s string) string {
-	return strings.Join(strings.Fields(s), " ")
+// errorText returns err on one line. For a failed HTTP request it drops the request URL, which the header shows.
+func errorText(err error) string {
+	if urlErr, ok := errors.AsType[*url.Error](err); ok {
+		err = urlErr.Err
+	}
+
+	return strings.Join(strings.Fields(err.Error()), " ")
 }

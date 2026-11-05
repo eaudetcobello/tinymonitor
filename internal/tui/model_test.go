@@ -2,9 +2,10 @@ package tui_test
 
 import (
 	"context"
-	"errors"
+	"net/url"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -16,7 +17,8 @@ import (
 	"github.com/eaudetcobello/tinymonitor/internal/tui"
 )
 
-var errServer = errors.New("connection refused")
+// errServer is what the client returns when the server is down: the request URL wrapping the dial error.
+var errServer = &url.Error{Op: "Get", URL: "http://localhost:1323/metrics", Err: syscall.ECONNREFUSED}
 
 // call is one request made to a fakeSource.
 type call struct{ from, to time.Time }
@@ -215,14 +217,14 @@ func TestErrorKeepsLastDataAndRetries(t *testing.T) {
 	m, next = poll(t, m, next)
 
 	out := screen(m)
-	for _, want := range []string{"error: connection refused", "retrying every 1ms", "latest 30.0%"} {
+	for _, want := range []string{"error (retrying every 1ms): connection refused", "latest 30.0%"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("after an error the view does not contain %q:\n%s", want, out)
 		}
 	}
 
 	m, _ = poll(t, m, next)
-	if out := screen(m); strings.Contains(out, "error:") {
+	if out := screen(m); strings.Contains(out, "error") {
 		t.Errorf("the error stays after a successful fetch:\n%s", out)
 	}
 }
