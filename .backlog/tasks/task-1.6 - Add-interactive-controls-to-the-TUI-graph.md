@@ -1,11 +1,11 @@
 ---
 id: TASK-1.6
 title: Add interactive controls to the TUI graph
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-05T04:02:00Z'
-updated_date: '2026-11-05T05:10:00Z'
+updated_date: '2026-11-05T05:12:00Z'
 labels:
   - tui
 dependencies:
@@ -50,7 +50,7 @@ With a working graph, the next friction is restarting the command to look at ano
 - [x] #4 A help footer lists the available keys
 - [x] #5 The daemon collects and stores a cpu metric (used_pct, user_pct, system_pct) alongside memory
 - [x] #6 A key switches the graph between the cpu and memory kinds without restarting
-- [ ] #7 Downsampling buckets sit on a fixed time grid, so the averages of past buckets stay the same between refreshes
+- [x] #7 Downsampling buckets sit on a fixed time grid, so the averages of past buckets stay the same between refreshes
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -131,17 +131,20 @@ Deviations from the plan:
 - Groma: the architecture map lives on the groma-curation branch, not master, so the collector description (memory only) is not updated here.
 
 Verification: go vet, go test -race ./..., golangci-lint run ./... (0 issues). Live: GET /metrics?kind=cpu returns used_pct/user_pct/system_pct samples at 2/s from the daemon. TUI driven in a pty (pyte) against the running daemon: v cycles avail_gib -> total_gib, k switches memory -> cpu -> memory with the header updating, v on cpu shows user_pct, - goes to 1m, + to 5m then 15m, space shows PAUSED with the age frozen for 3s and the footer reading 'space resume', p resumes, q exits 0.
+
+Stable buckets: gridRange puts the downsampling slices on multiples of the bucket width in absolute time; rebuild sets the Y range first so GraphWidth (and so the bucket count) includes the Y label width, then uses the grid for downsample, maxGap and the X range. Verified: with the old range, 0 of 200 downsampled points stayed the same after the view moved 700ms; the new test holds every complete bucket identical. Live pty run (110x22, refresh 500ms, 23 frames 250ms apart, newest 4 columns ignored): master build changed the chart in 13 intervals (every poll), the new build in 5 (one-dot scroll steps, about once per 1.4s bucket). go vet, go test -race, golangci-lint: clean.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-The TUI graph is now explorable without restarting, and the daemon records CPU usage.
+The TUI graph is now explorable without restarting, the daemon records CPU usage, and the line no longer wobbles between refreshes.
 
 - Daemon: collector.Gopsutil gains CPU(), computing used_pct, user_pct and system_pct from the change between two cpu.Times readings (first call primes the baseline). monitor() stores a memory and a CPU sample each tick; one failing does not skip the other.
 - TUI keys: k cycles cpu/memory (reloads the window, resets to the kind's default value), v cycles the value series (no request), +/- steps through 1m, 5m, 15m, 1h (widening reloads the whole window, narrowing only redraws), space/p pauses and resumes (pause freezes the axis and the age; keys still work on the frozen moment). The footer lists the keys and the status line shows PAUSED.
 - Keys that start a fetch bump a generation counter; late polls and results from an older generation are dropped, so one poll chain runs and an old kind's answer never lands in the new buffer. Polls ask for at most one window, so resuming after a long pause stays cheap.
-- Tests: CPU math and baseline, preset/value/kind stepping, and model tests for each key including stale results, replace on widen, and pause/resume chains.
+- Downsampling buckets sit on a fixed time grid (multiples of the bucket width), so past buckets keep their averages and the line scrolls by whole dots instead of being re-averaged on every poll. A resize, window change or wider Y label moves the grid once.
+- Tests: CPU math and baseline, preset/value/kind stepping, grid alignment and stability, and model tests for each key including stale results, replace on widen, and pause/resume chains.
 
 Follow-up: the Groma map on groma-curation still describes the collector as memory only.
 <!-- SECTION:FINAL_SUMMARY:END -->
