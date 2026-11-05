@@ -24,7 +24,10 @@ const (
 	DefaultRefresh = time.Second
 )
 
-var ErrInvalidFlag = errors.New("invalid flag")
+var (
+	ErrInvalidFlag = errors.New("invalid flag")
+	errAgentID     = errors.New("expected an integer between 0 and 4294967295")
+)
 
 // Config holds the validated command-line settings of tinymonitor-tui.
 type Config struct {
@@ -39,27 +42,22 @@ type Config struct {
 }
 
 // ParseConfig parses and validates args (without the program name).
-// Usage and parse errors are written to output; --help returns flag.ErrHelp.
+// Errors are returned, not printed. --help writes the usage to output and returns flag.ErrHelp.
 func ParseConfig(args []string, output io.Writer) (Config, error) {
 	cfg := Config{AgentID: DefaultAgentID}
 
 	var kind string
 
+	// Errors are returned rather than printed, so the caller reports them once.
 	fs := flag.NewFlagSet("tinymonitor-tui", flag.ContinueOnError)
-	fs.SetOutput(output)
-	fs.Usage = func() {
-		_, _ = fmt.Fprint(fs.Output(),
-			"tinymonitor-tui graphs tinymonitor metrics live in the terminal.\n\n",
-			"Usage: tinymonitor-tui [flags]\n\nFlags:\n")
-
-		fs.PrintDefaults()
-	}
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
 
 	fs.StringVar(&cfg.ServerURL, "server", DefaultServerURL, "base URL of the tinymonitor HTTP API")
 	fs.Func("agent", fmt.Sprintf("agent ID to graph (default %d)", DefaultAgentID), func(s string) error {
 		id, err := strconv.ParseUint(s, 10, 32)
 		if err != nil {
-			return fmt.Errorf("expected an integer between 0 and 4294967295: %w", err)
+			return errAgentID
 		}
 
 		cfg.AgentID = uint32(id)
@@ -68,9 +66,15 @@ func ParseConfig(args []string, output io.Writer) (Config, error) {
 	})
 	fs.StringVar(&kind, "kind", string(model.KindMemory), fmt.Sprintf("metric kind, one of %v", model.Kinds()))
 	fs.DurationVar(&cfg.Window, "window", DefaultWindow, "rolling time window shown on the graph")
-	fs.DurationVar(&cfg.Refresh, "refresh", DefaultRefresh, "how often to poll the API, at most --window")
+	fs.DurationVar(&cfg.Refresh, "refresh", DefaultRefresh, "how often to poll the API, at most -window")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printUsage(fs, output)
+
+			return Config{}, err //nolint:wrapcheck // Callers match flag.ErrHelp.
+		}
+
 		return Config{}, fmt.Errorf("%w: %w", ErrInvalidFlag, err)
 	}
 
@@ -83,6 +87,15 @@ func ParseConfig(args []string, output io.Writer) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func printUsage(fs *flag.FlagSet, output io.Writer) {
+	_, _ = fmt.Fprint(output,
+		"tinymonitor-tui graphs tinymonitor metrics live in the terminal.\n\n",
+		"Usage: tinymonitor-tui [flags]\n\nFlags:\n")
+
+	fs.SetOutput(output)
+	fs.PrintDefaults()
 }
 
 func (c *Config) validate(kind string) error {

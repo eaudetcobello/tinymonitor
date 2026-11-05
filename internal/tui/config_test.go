@@ -103,9 +103,15 @@ func TestParseConfigRejectsInvalidValues(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := tui.ParseConfig(tt.args, io.Discard)
+			var out strings.Builder
+
+			_, err := tui.ParseConfig(tt.args, &out)
 			if !errors.Is(err, tui.ErrInvalidFlag) {
 				t.Fatalf("got error %v, want ErrInvalidFlag", err)
+			}
+
+			if out.Len() > 0 {
+				t.Errorf("wrote %q to output, want errors returned only", out.String())
 			}
 
 			if !strings.Contains(err.Error(), tt.mention) {
