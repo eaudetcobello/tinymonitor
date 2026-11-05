@@ -9,3 +9,8 @@ linters:
     - mnd
     - noinlineerr
     - exhaustruct_v5
+  settings:
+    wrapcheck:
+      # Echo response writers return the handler's final error, so wrapping them adds nothing.
+      ignore-sig-regexps:
+        - '\(\*github\.com/labstack/echo/v5\.Context\)\.(String|JSON|HTML|XML|Blob|Stream|File|NoContent|Redirect)\('
