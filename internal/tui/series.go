@@ -9,16 +9,17 @@ import (
 	"github.com/eaudetcobello/tinymonitor/internal/model"
 )
 
+// usedPct is the default series of the memory and CPU kinds.
+const usedPct = "used_pct"
+
 // gapSpacings is how many typical sample spacings two samples may be apart before the line breaks.
 const gapSpacings = 4
 
 // defaultValue names the series graphed for kind when -value is empty, or "" when the kind has none.
 func defaultValue(kind model.Kind) string {
 	switch kind {
-	case model.KindMemory:
-		return "used_pct"
-	case model.KindCPU:
-		return ""
+	case model.KindMemory, model.KindCPU:
+		return usedPct
 	}
 
 	return ""

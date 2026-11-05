@@ -44,7 +44,7 @@ func pts(pairs ...float64) []point {
 func TestMerge(t *testing.T) {
 	t.Parallel()
 
-	v := map[string]float64{"used_pct": 1}
+	v := map[string]float64{usedPct: 1}
 
 	tests := []struct {
 		name       string
@@ -95,9 +95,10 @@ func TestSelectValue(t *testing.T) {
 		wantValue string
 	}{
 		{"explicit value wins", "c", model.KindMemory, data, "c"},
-		{"kind default", "", model.KindMemory, data, "used_pct"},
-		{"first name without a default", "", model.KindCPU, data, "a"},
-		{"nothing to pick", "", model.KindCPU, nil, ""},
+		{"memory default", "", model.KindMemory, data, usedPct},
+		{"cpu default", "", model.KindCPU, data, usedPct},
+		{"first name without a default", "", model.Kind("other"), data, "a"},
+		{"nothing to pick", "", model.Kind("other"), nil, ""},
 	}
 
 	for _, tt := range tests {

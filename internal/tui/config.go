@@ -69,7 +69,7 @@ func ParseConfig(args []string, output io.Writer) (Config, error) {
 	})
 	fs.StringVar(&kind, "kind", string(model.KindMemory), fmt.Sprintf("metric kind, one of %v", model.Kinds()))
 	fs.StringVar(&cfg.Value, "value", "",
-		"value series to graph, such as used_pct (default: used_pct for memory, else the first series in the data)")
+		"value series to graph, such as used_pct (default: used_pct)")
 	fs.DurationVar(&cfg.Window, "window", DefaultWindow, "rolling time window shown on the graph")
 	fs.DurationVar(&cfg.Refresh, "refresh", DefaultRefresh, "how often to poll the API, at most -window")
 
